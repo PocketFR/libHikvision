@@ -7,7 +7,7 @@ stores on SD cards and NFS Shares.
 
 Using this class you can view details about recordings stored in a datadir and extract video and thumbnails.
 
-An example application is included named 'demo.php'.
+An example application is included named 'CAM01.php' that require 'record-viewer.php'. Made sure to edit paths on this files to match with your system.
 
 ## Contributing
 
