@@ -1,10 +1,10 @@
 <?php
 /*
- * Hikvision CCTV Class, version 1.2
+ * Hikvision CCTV Class, version 2.0
  * This class will parse a Hikvision index file (e.g. index00.bin) tha
  * typically gets stored on external media such as an SD card or NFS share.
  *
- * Access to avconv and shell() is required for the creation of thumbnails.
+ * Access to ffmpeg and shell() is required for the creation of thumbnails.
  *
  * Thanks go to Alexey Ozerov for his C++ hiktools utility:
  *    https://github.com/aloz77/hiktools
@@ -21,7 +21,7 @@ define("NASINFO_LEN", 68);	// Length of info.bin used on NAS storage.
 
 class hikvisionCCTV
 {
-	private $configuration;
+	public $configuration;
 
 	///
 	/// __construct( Array of paths to datadir's' )
@@ -55,14 +55,95 @@ class hikvisionCCTV
 		// array.
 		foreach($paths as $path)
 		{
+			$indexfile = $this->pathJoin($path ,'index00.bin');
+			$indextype = 'bin';
+			if (!file_exists($indexfile)) {
+				$indexfile = $this->pathJoin($path ,'record_db_index00');
+				$indextype = 'sqlite';
+			}
 			$tmp = array(
 				'path' => $path,
-				'indexFile' => $this->pathJoin($path ,'index00.bin')
+				'indexFile' => $indexfile,
+				'idxType' => $indextype
 				);
 			$this->configuration[] = $tmp;
 		}
 	}
 	
+	private function log($message) {
+		$logpath = '/var/log/hikvision/'.substr(str_replace('/','-',dirname($this->configuration[0]["path"],1)),1).'_'.date("Y-m-d").'.log';
+		$logmessage = '['.date("d/m/Y H:i:s").'] ';
+		if(isset($_SERVER["SHELL"])) {
+			$logmessage.="SYSTEM : ";	
+		} elseif(isset($_SERVER["HTTP_REMOTE_NEXTCLOUD_USER"])) {
+			$logmessage.="Utilisateur ".$_SERVER["HTTP_REMOTE_NEXTCLOUD_USER"]." : ";
+		} elseif(isset($_SERVER["HTTP_REMOTE_BASIC_USER"])) {
+			$logmessage.="Utilisateur externe ".$_SERVER["HTTP_REMOTE_BASIC_USER"]." : ";
+		} else {
+			$logmessage.="Utilisateur inconnu ";
+		}
+		
+		file_put_contents($logpath,$logmessage.$message."\n",FILE_APPEND);
+		if(isset($_SERVER["SHELL"])) {
+			chown($log, "www-data");
+			chgrp($log, "www-data");
+		}
+	}
+	
+	public function exportlogs() {
+		$this->log("VISIONNAGE des logs");
+		$logpaths = glob('/var/log/hikvision/'.substr(str_replace('/','-',dirname($this->configuration[0]["path"],1)),1).'_*.log');
+		$logs = "";
+		foreach ($logpaths as $log) {
+			$logs .= file_get_contents($log);
+		}
+		return $logs;
+	}
+	
+	public function eraseSegmentsBefore($time) {
+		$old_records = $this->getSegmentsBetweenDates(0, $time);
+		$this->log("SUPPRESSION des vidéos antérieur au ".date("d/m/Y H:i:s",$time));
+		$nb_records = count($old_records);
+		$nb = 0;
+		$nb_suppr = 0;
+		foreach($old_records as $old_record) {
+			$nb++;
+			$file = $this->getFileName($old_record["cust_fileNum"]);
+			$path = $this->pathJoin(
+				$this->configuration[$old_record["cust_dataDirNum"]]['path'],
+				$file
+			);
+			
+			$fh = fopen($path, "rb+");
+			$f0 = fopen("/dev/zero", "r");
+			if($fh == false) {
+				echo "\r\nimpossible d'ouvrir le fichier\n";
+				$this->log("impossible d'ouvrir le fichier $path");
+				fclose($fh);
+				fclose($f0);
+				continue;
+			}
+
+			if( fseek($fh, $old_record["startOffset"]) == -1 ) {
+				echo "\r\nimpossible d'ouvrir le fichier a la position ".$old_record["startOffset"]."\n";
+				$this->log("impossible d'ouvrir le fichier $path a la position ".$old_record["startOffset"]);
+				fclose($fh);
+				fclose($f0);
+				continue;
+			}
+			if(fread($fh,32) != fread($f0,32)) {
+				echo "\r\nSuppression Rec $nb / $nb_records : $path (".strftime('le %d/%m de %H:%M:%S',$old_record["cust_startTime"]).strftime(' - %H:%M:%S', $old_record['cust_endTime']).")\n";
+				$nb_suppr++;
+				fseek($fh, $old_record["startOffset"]);
+				fwrite($fh, fread($f0, $old_record["endOffset"]-$old_record["startOffset"]));
+			} else {
+				echo "\rSkip $nb / $nb_records";
+			}
+			fclose($fh);
+			fclose($f0);
+		}
+		$this->log("SUPPRESSION : $nb_suppr enregistrements supprimés");
+	}
 	
 	///
 	/// getNASInfo( Path to NAS info.bin )
@@ -171,7 +252,6 @@ class hikvisionCCTV
 		fclose($fh);
 		return $results;
 	}
-
 	
 	///
 	/// getSegments()
@@ -185,7 +265,71 @@ class hikvisionCCTV
 		foreach($this->configuration as $dataDir)
 		{
 			// Get the segments for the index file of this datadir.
-			$segments = $this->getSegmentsForIndexFile($dataDir['indexFile']);
+			if ($dataDir['idxType'] == 'bin') {
+				$segments = $this->getSegmentsForIndexFile($dataDir['indexFile']);
+				// remove overlaps on same file (idxType bin seems to not remove old indexes after rewrite the mp4 file)
+				
+					$files=array();
+					$no_overlap = array();
+					foreach($segments as $segment) {
+						if(!isset($files[$segment["cust_fileNum"]])) {
+							$files[$segment["cust_fileNum"]] = array();
+						}
+						$files[$segment["cust_fileNum"]][] = $segment;
+					}
+					foreach($files as $file => $files_segments) {
+						usort($files_segments, function($a, $b) {
+							if ($a["cust_startTime"] === $b["cust_startTime"]) {
+								return 0;
+							}
+							return $a["cust_startTime"] < $b["cust_startTime"] ? -1 : 1;
+						});
+						uasort($files_segments, function($a, $b) {
+							if ($a["startOffset"] === $b["startOffset"]) {
+								return 0;
+							}
+							return $a["startOffset"] < $b["startOffset"] ? -1 : 1;
+						});
+
+						$end = 0;
+						$overlaps = array();
+						foreach($files_segments as $key => $segment) {
+							if($segment["startOffset"] < $end) {
+								$overlaps[] = array($segment["startOffset"], $end, $key);
+							}
+							$end = max($end,$segment["endOffset"] );
+						}
+						
+						foreach($overlaps as $overlap) {
+							$segsId = array();
+							foreach($files_segments as $key => $segment) {
+								if( ($segment["startOffset"] >= $overlap[0] && $segment["startOffset"] <= $overlap[1]) || ($segment["endOffset"] >= $overlap[0] && $segment["endOffset"] <= $overlap[1]) ) {
+									$segsId[] = $key;
+								}
+							}
+							foreach ($segsId as $segId) {
+								if ($segId != min($segsId) && isset($files_segments[$segId])) {
+									if ( 
+									($files_segments[$segId]["startOffset"] >= $files_segments[min($segsId)]["startOffset"] && $files_segments[$segId]["startOffset"] <= $files_segments[min($segsId)]["endOffset"])
+										||
+									($files_segments[$segId]["endOffset"] >= $files_segments[min($segsId)]["startOffset"] && $files_segments[$segId]["endOffset"] <= $files_segments[min($segsId)]["endOffset"])
+										||
+									($files_segments[min($segsId)]["startOffset"] >= $files_segments[$segId]["startOffset"] && $files_segments[min($segsId)]["startOffset"] <= $files_segments[$segId]["endOffset"])
+										||
+									($files_segments[min($segsId)]["endOffset"] >= $files_segments[$segId]["startOffset"] && $files_segments[min($segsId)]["endOffset"] <= $files_segments[$segId]["endOffset"])
+										) {
+											unset($files_segments[$segId]);
+										}
+								}
+							}
+						}
+						$no_overlap = array_merge($no_overlap, array_values($files_segments));
+					}
+					$segments = $no_overlap;
+				
+			} else if ($dataDir['idxType'] == 'sqlite') {
+				$segments = $this->getSegmentsForIndexFileSQL($dataDir['indexFile']);
+			}
 			
 			// Iterate over this datadir's segments and append the segment to
 			// the results array.
@@ -197,7 +341,37 @@ class hikvisionCCTV
 		return $results;
 	}
 
+	///
+	/// getSegmentsForIndexFileSQL( Path to Index File )
+	/// Returns an array of files and segments from a
+	/// Hikvision "record_db_index00" file.
+	///
+	private function getSegmentsForIndexFileSQL( $_indexFile )
+	{
+		$db = new SQLite3($_indexFile, SQLITE3_OPEN_READONLY);
 
+		$dbquery = $db->query('SELECT
+				file_no as "cust_fileNum",
+				start_offset as "startOffset",
+				end_offset as "endOffset",
+				start_time_tv_sec as "cust_startTime",
+				end_time_tv_sec as "cust_endTime"
+			FROM record_segment_idx_tb
+			WHERE record_type != 0 AND end_offset != 0;
+		');
+
+		$results = array();
+		while ($row = $dbquery->fetchArray()) {
+			$row['cust_dataDirNum'] = $this->getDataDirNum($_indexFile);
+			$row['fileExists'] = True;
+			array_push($results, $row);
+			// error_log(json_encode($row));
+		}
+		$db->close();
+		// error_log(json_encode($results));
+		return $results;
+
+	}
 	///
 	/// getSegmentsForIndexFile( Path to Index File )
 	/// Returns an array of files and segments from a Hikvision "index00.bin"
@@ -243,7 +417,8 @@ class hikvisionCCTV
 					'C4infoNum/'.
 					'C8infoTypes/'.
 					'C4infoStartTime/'.
-					'C4infoEndTime/'.
+					'C2infoEndTime/'.
+					'C2existByte/'.
 					'C4infoStartOffset/'.
 					'C4infoEndOffset'
 					,$data);
@@ -255,7 +430,10 @@ class hikvisionCCTV
 				$tmp['cust_fileNum'] = $i;
 				$tmp['cust_dataDirNum'] = $this->getDataDirNum($_indexFile);
 				$tmp['cust_indexFile'] = $_indexFile;
-		
+				$tmp['fileExists'] = False;
+				if ($tmp['existByte1'] >= 160 && $tmp['existByte2'] >= 94) {
+					$tmp['fileExists'] = True;
+				}			   
 				// Ignore empty and those which are still recording.	
 				if($tmp['type'] != 0 && $tmp['endTime'] != 0)
 					array_push($results, $tmp);
@@ -272,6 +450,7 @@ class hikvisionCCTV
 	///
 	public function getSegmentsBetweenDates($_start , $_end)
 	{
+		$this->log("RECHERCHE de vidéos entre le ".date("d/m/Y H:i:s",$_start)." et ".date("d/m/Y H:i:s",$_end));
 		$results = array();
 		$segments = $this->getSegments();
 
@@ -357,7 +536,7 @@ class hikvisionCCTV
 			$this->configuration[$_dataDirNum]['path'],
 			$file
 		);
-		
+		$this->log("STREAM SEGMENT/VISIONNAGE du fichier $path startOffset : $_startOffset, endOffset : $_endOffset");
 		$fh = fopen( $path, 'rb');
 		if($fh == false)
 			die("Unable to open $path");
@@ -385,14 +564,15 @@ class hikvisionCCTV
 	/// Extracts a recording segment (likely x264) and copies the raw video
 	/// stream into an MP4 container that's more useful.
 	///
-	public function extractSegmentMP4( $_dataDirNum, $_file , $_startOffset, $_endOffset , $_cachePath )
+	public function extractSegmentMP4( $camera_name, $_dataDirNum, $_file , $_startOffset, $_endOffset , $_cachePath )
 	{
 		$file = $this->getFileName($_file);
 		$path = $this->pathJoin(
 			$this->configuration[$_dataDirNum]['path'],
 			$file
 		);
-		$tempFileName = $_dataDirNum.'.'. $_file.'.'. $_startOffset.'.'. $_endOffset;
+		$this->log("EXPORT PARTIEL/VISIONNAGE du fichier $path startOffset : $_startOffset, endOffset : $_endOffset");
+		$tempFileName = $camera_name.'.'.$_dataDirNum.'.'. $_file.'.'. $_startOffset.'.'. $_endOffset;
 		$pathExtracted = $this->pathJoin( $_cachePath, $tempFileName.'.h264');
 		$pathTranscoded = $this->pathJoin( $_cachePath, $tempFileName.'.mp4');
 		
@@ -404,20 +584,24 @@ class hikvisionCCTV
 		// pipes to improve performance. Testing showed just piping dd to
 		// ffmpeg was _really_ slow.
 		$fh = fopen( $path, 'rb');
-		if($fh == false)
+		if($fh == false) {
+			error_log("impossible d'ouvrir le fichier");
 			die("Unable to open $path");
+		}
 		
-		if( fseek($fh, $_startOffset) === false )
+		if( fseek($fh, $_startOffset) == -1 ) {
+			error_log("impossible d'ouvrir le fichier a la position $_startOffset");
 			die("Unable to seek to position $_startOffset in $path");
-		
+		}
 		while(ftell($fh) < $_endOffset)
 		{
 			file_put_contents($pathExtracted, fread($fh, 4096), FILE_APPEND);
 		}
 		fclose($fh);
 		
-		// Extract footage and pass to avconv. 
-		$cmd = 'avconv -i '.$pathExtracted.' -threads auto -c:v copy -c:a none '.$pathTranscoded;
+		// Extract footage and pass to ffmpeg. 
+		$cmd = '[ `ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nokey=1:noprint_wrappers=1 '.$pathExtracted.'` = "h264" ] && ffmpeg -i '.$pathExtracted.' -threads auto -c:v copy -c:a none '.$pathTranscoded.' || ffmpeg -i '.$pathExtracted.' -threads auto -c:v h264 -c:a none '.$pathTranscoded.';';
+		error_log($cmd);
 		system($cmd);
 		
 		// Transcode complete. Remove original file.
@@ -426,6 +610,29 @@ class hikvisionCCTV
 		return $pathTranscoded;
 	}
 	
+	
+	public function extractFullMP4( $camera_name, $_dataDirNum, $_file , $_cachePath )
+	{
+		$file = $this->getFileName($_file);
+		$path = $this->pathJoin(
+			$this->configuration[$_dataDirNum]['path'],
+			$file
+		);
+		$this->log("EXPORT TOTAL/VISIONNAGE du fichier $path");
+		$tempFileName = $camera_name.'.'.$_dataDirNum.'.'. $_file.'.Full';
+		$pathTranscoded = $this->pathJoin( $_cachePath, $tempFileName.'.mp4');
+		
+		// If file already exists, return path to it.
+		if( file_exists( $pathTranscoded ))
+			return $pathTranscoded;
+		
+		// Extract footage and pass to ffmpeg. 
+		$cmd = '[ `ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nokey=1:noprint_wrappers=1 '.$path.'` = "h264" ] && ffmpeg -i '.$path.' -threads auto -c:v copy -c:a none '.$pathTranscoded.' || ffmpeg -i '.$path.' -threads auto -c:v h264 -c:a none '.$pathTranscoded.';';
+		// $cmd = 'cp '.$path.' '.$pathTranscoded.';';
+		system($cmd);
+				
+		return $pathTranscoded;
+	}
 	
 	///
 	/// streamFileToBrowser (Path to file)
@@ -443,12 +650,15 @@ class hikvisionCCTV
 		* 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
 		* THIS SOFTWARE IS PROVIDED BY THE FREEBSD PROJECT "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE FREEBSD PROJECT OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 		*/
+		$this->log("STREAM/VISIONNAGE du fichier $_file");
 		ob_clean();
 		
 		$fh = @fopen($_file, 'rb');
 		$file_size = filesize( $_file );
 		header('Content-Type: video/mp4');
-		
+		if (isset($_GET["download"])) {
+			header('Content-Disposition: attachment; filename="'.basename($_file).'"');
+		}
 		// Check if this is a HTTP Range request.
 		$range = '';
 		if(isset($_SERVER['HTTP_RANGE']))
@@ -528,8 +738,21 @@ class hikvisionCCTV
 		
 		if(!file_exists($_output))
 		{
-			$cmd = 'dd if='.$path.' skip='.$_offset.' ibs=1 | avconv -i pipe:0 -vframes 1 -an '.$_output.' >/dev/null 2>&1';
+			$fh = fopen( $path, 'rb');
+			if($fh == false) {
+				error_log("impossible d'ouvrir le fichier");
+				die("Unable to open $path");
+			}
+			
+			if( fseek($fh, $_offset) == -1 ) {
+				error_log("impossible d'ouvrir le fichier a la position $_offset");
+				die("Unable to seek to position $_offset in $path");
+			}
+			file_put_contents('/tmp/temp_thumbnail_'.$_file.'_'.$_offset.'.h264', fread($fh, 500000));
+			fclose($fh);
+			$cmd = 'ffmpeg -i /tmp/temp_thumbnail_'.$_file.'_'.$_offset.'.h264 -vframes 1 -vf scale=320:180 -an '.$_output.' >/dev/null 2>&1';
 			system($cmd);
+			unlink('/tmp/temp_thumbnail_'.$_file.'_'.$_offset.'.h264');
 		}
 	}
 	
