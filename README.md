@@ -1,5 +1,5 @@
 # libHikvision Fork
-Add support for new hikvision camera tht use sqlite and some other stuff
+Add support for new hikvision camera that use sqlite and some other stuff
 
 # libHikvision
 A PHP Class for working with Hikvision datadir's, this file will parse index00.bin files that Hikvision IP Camera software 
