@@ -308,15 +308,15 @@ class hikvisionCCTV
 								}
 							}
 							foreach ($segsId as $segId) {
-								if ($segId != min($segsId) && isset($files_segments[$segId])) {
+								if ($segId != max($segsId) && isset($files_segments[$segId])) {
 									if ( 
-									($files_segments[$segId]["startOffset"] >= $files_segments[min($segsId)]["startOffset"] && $files_segments[$segId]["startOffset"] <= $files_segments[min($segsId)]["endOffset"])
+									($files_segments[$segId]["startOffset"] >= $files_segments[max($segsId)]["startOffset"] && $files_segments[$segId]["startOffset"] <= $files_segments[max($segsId)]["endOffset"])
 										||
-									($files_segments[$segId]["endOffset"] >= $files_segments[min($segsId)]["startOffset"] && $files_segments[$segId]["endOffset"] <= $files_segments[min($segsId)]["endOffset"])
+									($files_segments[$segId]["endOffset"] >= $files_segments[max($segsId)]["startOffset"] && $files_segments[$segId]["endOffset"] <= $files_segments[max($segsId)]["endOffset"])
 										||
-									($files_segments[min($segsId)]["startOffset"] >= $files_segments[$segId]["startOffset"] && $files_segments[min($segsId)]["startOffset"] <= $files_segments[$segId]["endOffset"])
+									($files_segments[max($segsId)]["startOffset"] >= $files_segments[$segId]["startOffset"] && $files_segments[max($segsId)]["startOffset"] <= $files_segments[$segId]["endOffset"])
 										||
-									($files_segments[min($segsId)]["endOffset"] >= $files_segments[$segId]["startOffset"] && $files_segments[min($segsId)]["endOffset"] <= $files_segments[$segId]["endOffset"])
+									($files_segments[max($segsId)]["endOffset"] >= $files_segments[$segId]["startOffset"] && $files_segments[max($segsId)]["endOffset"] <= $files_segments[$segId]["endOffset"])
 										) {
 											unset($files_segments[$segId]);
 										}
