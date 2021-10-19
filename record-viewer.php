@@ -40,6 +40,7 @@ $cctv = new hikvisionCCTV( $cfgCCTVPaths );
 //Check Logs
 if (isset($_GET["logs"])) {
 	header('Content-type: text/plain');
+	header('Content-Disposition: filename="'.$site_name.'-'.$camera_name.'.log"');
 	echo $cctv->exportlogs();
 	exit;
 }
@@ -148,7 +149,7 @@ ksort($segmentsByDay);
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 </head>
-<body onscroll="scroll();">
+<body>
 <style type="text/css">
 body{font-family:'Bitstream Vera Sans','DejaVu Sans',Tahoma,sans-serif;font-size:13px;background-color:#e8e8e8}
 .visualLabel{float:right;background-color:#e8e8e8;border-radius:10px;padding:0.3em;font-size:x-small}
@@ -302,37 +303,15 @@ window.onbeforeunload = confirmExit;
 function confirmExit() {
 	document.getElementById("loading").style.display = "";
 }
-function checkVisible(elm) {
-  var rect = elm.getBoundingClientRect();
-  var viewHeight = Math.max(document.documentElement.clientHeight, window.innerHeight);
-  return !(rect.bottom < 0 || rect.top - viewHeight >= 0);
-}
 function errorimg(e) {
 	e.src='images/loading.gif';
-	if(checkVisible(e)) {
-		e.dataset.errorstatus="1";
-		thumbnail_ajax(e);
-	} else {
-		e.dataset.errorstatus="0";
-	}
-}
-function thumbnail_ajax(e) {
 	var xhr = new XMLHttpRequest();
 	xhr.onreadystatechange = thumbnail_created(e);
 	xhr.open('GET', '?ajax-thumbnail&dir='+e.dataset.dir+'&file='+e.dataset.file+'&offset='+e.dataset.offset);
 	xhr.send();
 }
 function thumbnail_created(e) {
-	e.dataset.errorstatus="2";
 	e.src='<?php echo $tmpRelativePath; ?>'+site_name+'_'+camera_name+'_'+e.dataset.dir+'_'+e.dataset.file+'_'+e.dataset.offset+'.jpg';
-}
-function scroll() {
-	[].forEach.call(document.querySelectorAll('[data-errorstatus="0"]'), function (el) {
-		if(checkVisible(el)) {
-			el.dataset.errorstatus="1";
-			thumbnail_ajax(el);
-		}
-	});
 }
 </script>
 <div id="loading" style="position:fixed; top:0; left:0; width: 100%; height:100%; background-color: #00000085; z-index:99; display:none;">
@@ -469,7 +448,7 @@ if(isset($segmentsByDay[$filterDay]))
 		$video->stop = $recording['cust_endTime'];
 		$video->duree = $recording['cust_endTime'] - $recording['cust_startTime'];
 		$video->mozaique = '<div class="cctvImg" id="cctv-'.$cctvId.'" onclick="highlight('.$cctvId.');">'.$lienvideodownload.$lienvideo.
-				'<img src="'.$thumbnail.'" width="320" height="180" onerror="errorimg(this);" data-dir="'.$recording['cust_dataDirNum'].'" data-file="'.$recording['cust_fileNum'].'" data-offset="'.$recording['startOffset'].'"/></a>'.
+				'<img src="'.$thumbnail.'" loading="lazy" width="320" height="180" onerror="errorimg(this);" data-dir="'.$recording['cust_dataDirNum'].'" data-file="'.$recording['cust_fileNum'].'" data-offset="'.$recording['startOffset'].'"/></a>'.
 				'<p>'.$startTime.' à '. $endTime .' ('.$duree.'s)</p>'.
 				'</div>';
 		$tableau[] = $video;
