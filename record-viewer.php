@@ -306,12 +306,15 @@ function confirmExit() {
 function errorimg(e) {
 	e.src='images/loading.gif';
 	var xhr = new XMLHttpRequest();
-	xhr.onreadystatechange = thumbnail_created(e);
+	xhr.onreadystatechange = (function(x, e) {
+	   return function() {
+			if (x.readyState == XMLHttpRequest.DONE) {
+				e.src='<?php echo $tmpRelativePath; ?>'+site_name+'_'+camera_name+'_'+e.dataset.dir+'_'+e.dataset.file+'_'+e.dataset.offset+'.jpg';
+			}
+	   }
+	})(xhr, e);
 	xhr.open('GET', '?ajax-thumbnail&dir='+e.dataset.dir+'&file='+e.dataset.file+'&offset='+e.dataset.offset);
 	xhr.send();
-}
-function thumbnail_created(e) {
-	e.src='<?php echo $tmpRelativePath; ?>'+site_name+'_'+camera_name+'_'+e.dataset.dir+'_'+e.dataset.file+'_'+e.dataset.offset+'.jpg';
 }
 </script>
 <div id="loading" style="position:fixed; top:0; left:0; width: 100%; height:100%; background-color: #00000085; z-index:99; display:none;">
