@@ -10,9 +10,7 @@ $tmpPath = '/var/www/html/records/temp/'; # Path where temporary mp4 files can g
 
 $thumbnail_real = $tmpPath.$site_name.'_'.$camera_name;
 $thumbnail_relative = $tmpRelativePath.$site_name.'_'.$camera_name;
-
 require_once 'libHikvision.php';
-
 /**
 * Name: Preserve and update/rebuild query string<br>
 * @param Example:
@@ -43,6 +41,46 @@ if (isset($_GET["logs"])) {
 	header('Content-Disposition: filename="'.$site_name.'-'.$camera_name.'.log"');
 	echo $cctv->exportlogs();
 	exit;
+}
+
+//
+//Check SeeAll
+if(
+	isset($_GET['seeAll']) &&
+	isset($_GET['start']) &&
+	isset($_GET['end']) &&
+	preg_match("/^\d{4}\-(0[1-9]|1[012])\-(0[1-9]|[12][0-9]|3[01])$/",$_GET['start']) === 1 &&
+	checkdate(explode("-",$_GET['start'])[1],explode("-",$_GET['start'])[2],explode("-",$_GET['start'])[0]) &&
+	preg_match("/^\d{4}\-(0[1-9]|1[012])\-(0[1-9]|[12][0-9]|3[01])$/",$_GET['end']) === 1 &&
+	checkdate(explode("-",$_GET['end'])[1],explode("-",$_GET['end'])[2],explode("-",$_GET['end'])[0]) 
+	)
+{
+	$dayBegin = strtotime($_GET['start']);
+	$dayEnd = strtotime($_GET['end']) + 86399;
+	$filename = $cctv->extractSegmentsBetweenDatesMP4($site_name.'_'.$camera_name,$dayBegin,$dayEnd,$tmpPath);
+	if (isset($_GET["download"])) {
+		header('Location: '.$downloadRelativePath.$filename);
+	} else {
+		header('Location: '.$tmpRelativePath.$filename);
+	}
+	exit();
+}
+//
+//Check SeeSelecteds
+if(
+	isset($_GET['seeSelected']) &&
+	isset($_GET['selecteds']) 
+	)
+{
+	$selecteds = json_decode($_GET["selecteds"], true);
+
+	$filename = $cctv->extractSegmentsMP4($site_name.'_'.$camera_name,$selecteds,$tmpPath);
+	if (isset($_GET["download"])) {
+		header('Location: '.$downloadRelativePath.$filename);
+	} else {
+		header('Location: '.$tmpRelativePath.$filename);
+	}
+	exit();
 }
 
 
@@ -100,7 +138,6 @@ if(
 	exit();
 }
 
-
 $dayBegin = strtotime("today");
 $dayEnd = strtotime("tomorrow") - 1;
 // Need to check is valid date!
@@ -116,13 +153,11 @@ if( isset($_GET['Day']) && is_numeric($_GET['Day']) )
 {
 	$filterDay = $_GET['Day'];
 }
-
 //
 // Build array containing data.
 $segmentsByDay = array();
 // $segments = $cctv->getSegmentsBetweenDates($dayBegin, $dayEnd );
 $segments = $cctv->getSegmentsBetweenDates($dayBegin < strtotime('-30 days midnight GMT') ? strtotime('-30 days midnight GMT') : $dayBegin, $dayEnd );
-
 foreach($segments as $segment)
 {
 	$startTime = $segment['cust_startTime'];
@@ -152,6 +187,7 @@ ksort($segmentsByDay);
 <body>
 <style type="text/css">
 body{font-family:'Bitstream Vera Sans','DejaVu Sans',Tahoma,sans-serif;font-size:13px;background-color:#e8e8e8}
+button{font-family:'Bitstream Vera Sans','DejaVu Sans',Tahoma,sans-serif;font-size:13px}
 .visualLabel{float:right;background-color:#e8e8e8;border-radius:10px;padding:0.3em;font-size:x-small}
 form{margin-bottom:1em}
 fieldset{margin:0;padding:0;padding-top:1em;border:0}
@@ -278,6 +314,12 @@ button {
 	z-index: 10;
 	color: white;
 	font-size: 2em;
+	text-shadow: 1px 0 0 #000, -1px 0 0 #000, 0 1px 0 #000, 0 -1px 0 #000, 1px 1px #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+}
+.checkbox {
+	position: absolute;
+	z-index: 10;
+	float: left;
 }
 </style>
 <script>
@@ -316,6 +358,47 @@ function errorimg(e) {
 	xhr.open('GET', '?ajax-thumbnail&dir='+e.dataset.dir+'&file='+e.dataset.file+'&offset='+e.dataset.offset);
 	xhr.send();
 }
+function select_all() {
+	document.querySelectorAll(".checkbox").forEach(function(e) {
+		e.checked = true;
+	});
+	select();
+}
+function select_none() {
+	document.querySelectorAll(".checkbox").forEach(function(e) {
+		e.checked = false;
+	});
+	select();
+}
+function select() {
+	if (document.querySelectorAll(".checkbox:checked").length == 0 ) {
+		document.getElementById("voir").innerHTML = 'Voir toutes les vidéos';
+	} else {
+		document.getElementById("voir").innerHTML = 'Voir la sélection';
+	}
+}
+function see_selected(e) {
+	if (document.querySelectorAll(".checkbox:checked").length == 0 ) {
+		if (e.altKey) {
+			window.open('?seeAll&download&start=' + document.getElementById('SearchBegin').value + '&end=' + document.getElementById('SearchEnd').value);
+		} else {
+			window.open('?seeAll&start=' + document.getElementById('SearchBegin').value + '&end=' + document.getElementById('SearchEnd').value);
+		}
+	} else {
+		let selected = [];
+		document.querySelectorAll(".checkbox:checked").forEach( function(e) {
+			selected.push({cust_startTime: e.attributes["data-starttime"].value, cust_endTime: e.attributes["data-endtime"].value, cust_dataDirNum: e.attributes["data-dir"].value, cust_fileNum: e.attributes["data-file"].value, startOffset: e.attributes["data-start"].value, endOffset: e.attributes["data-end"].value});
+		});
+		selected.sort(function(a,b) {
+			return a.time - b.time;
+		});
+		if (e.altKey) {
+			window.open('?seeSelected&download&selecteds=' + encodeURIComponent(JSON.stringify(selected)));
+		} else {
+			window.open('?seeSelected&selecteds=' + encodeURIComponent(JSON.stringify(selected)));
+		}
+	}
+}
 </script>
 <div id="loading" style="position:fixed; top:0; left:0; width: 100%; height:100%; background-color: #00000085; z-index:99; display:none;">
 	<div style="position:absolute;top: calc(50% - 112px);left: calc(50% - 150px);background-color: white;width: 320px;z-index:100;text-align:center; border-radius: 30px;">
@@ -324,7 +407,10 @@ function errorimg(e) {
 	</div>
 </div>
 <h1><?php echo 'Enregistements '.$site_name.' - '.$camera_name; ?></h1>
-<button onclick="window.location='.'" style="position: absolute; top: 20px; right: 150px;">Liste des caméras</button>
+<button onclick="select_all();" style="position: absolute; top: 20px; right: 571px;">Selectionner tout</button>
+<button onclick="select_none();" style="position: absolute; top: 20px; right: 431px;">Déselectionner tout</button>
+<button id="voir" onclick="see_selected(event);" style="position: absolute; top: 20px; right: 276px; width: 156px;">Voir toutes les vidéos</button>
+<button onclick="window.location='.'" style="position: absolute; top: 20px; right: 145px;">Liste des caméras</button>
 <button onclick="window.location='../live/'" style="position: absolute; top: 20px; right: 20px;">Regarder le direct</button>
 <button onclick="window.open('?logs')" style="position: absolute; top: 50px; right: 20px;">Voir les Logs</button>
  <div id="LeftPanel">
@@ -443,6 +529,7 @@ if(isset($segmentsByDay[$filterDay]))
 			$cumulduree4 += $duree;
 		}
 		$lienvideo = '<a href="?datadir='.$recording['cust_dataDirNum'].'&file='.$recording['cust_fileNum'].'&start='.$recording['startOffset'].'&end='.$recording['endOffset'].'" target="_blank">';
+		$checkbox = '<input type="checkbox" class="checkbox" onclick="if (document.querySelectorAll(\'.checkbox:checked\').length == 0 ) {document.getElementById(\'voir\').innerHTML = \'Voir toutes les vidéos\';} else {document.getElementById(\'voir\').innerHTML = \'Voir la sélection\';}" data-dir="'.$recording['cust_dataDirNum'].'" data-file="'.$recording['cust_fileNum'].'" data-start="'.$recording['startOffset'].'" data-end="'.$recording['endOffset'].'" data-starttime="'.$recording['cust_startTime'].'" data-endtime="'.$recording['cust_endTime'].'" />';
 		$lienvideodownload = '<a class="download" href="?datadir='.$recording['cust_dataDirNum'].'&file='.$recording['cust_fileNum'].'&start='.$recording['startOffset'].'&end='.$recording['endOffset'].'&download" target="_blank">&DownArrowBar;</a>';
 		$thumbnail = $thumbnail_relative.'_'.$recording['cust_dataDirNum'].'_'.$recording['cust_fileNum'].'_'.$recording['startOffset'].'.jpg';
 		
@@ -450,7 +537,7 @@ if(isset($segmentsByDay[$filterDay]))
 		$video->start = $recording['cust_startTime'];
 		$video->stop = $recording['cust_endTime'];
 		$video->duree = $recording['cust_endTime'] - $recording['cust_startTime'];
-		$video->mozaique = '<div class="cctvImg" id="cctv-'.$cctvId.'" onclick="highlight('.$cctvId.');">'.$lienvideodownload.$lienvideo.
+		$video->mozaique = '<div class="cctvImg" id="cctv-'.$cctvId.'" onclick="highlight('.$cctvId.');">'.$checkbox.$lienvideodownload.$lienvideo.
 				'<img src="'.$thumbnail.'" loading="lazy" width="320" height="180" onerror="errorimg(this);" data-dir="'.$recording['cust_dataDirNum'].'" data-file="'.$recording['cust_fileNum'].'" data-offset="'.$recording['startOffset'].'"/></a>'.
 				'<p>'.$startTime.' à '. $endTime .' ('.$duree.'s)</p>'.
 				'</div>';
