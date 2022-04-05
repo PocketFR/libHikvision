@@ -11,7 +11,8 @@
  *
  * 
  */ 
-error_reporting(E_ALL | E_STRICT);
+//error_reporting(E_ALL | E_STRICT);
+error_reporting(0);
 ini_set('display_errors', 1);
 
 define("HEADER_LEN", 1280);	// Length of the header struct in bytes.
@@ -85,8 +86,8 @@ class hikvisionCCTV
 		
 		file_put_contents($logpath,$logmessage.$message."\n",FILE_APPEND);
 		if(isset($_SERVER["SHELL"])) {
-			chown($log, "www-data");
-			chgrp($log, "www-data");
+			chown($logpath, "www-data");
+			chgrp($logpath, "www-data");
 		}
 	}
 	
@@ -99,7 +100,21 @@ class hikvisionCCTV
 		}
 		return $logs;
 	}
-	
+	public function estimateSizeAfter($time) {
+		$records = $this->getSegmentsBetweenDates($time, time());
+		$files = array();
+		foreach($records as $record) {
+			$file = $this->getFileName($record["cust_fileNum"]);
+			$path = $this->pathJoin(
+				$this->configuration[$record["cust_dataDirNum"]]['path'],
+				$file
+			);
+			if (!in_array($path, $files)) {
+				$files[] = $path;
+			}
+		}
+		echo('Espace nécessaire : '.(count($files)*256/1000).'GB'.PHP_EOL);
+	}
 	public function eraseSegmentsBefore($time) {
 		$old_records = $this->getSegmentsBetweenDates(0, $time);
 		$this->log("SUPPRESSION des vidéos antérieur au ".date("d/m/Y H:i:s",$time));
@@ -557,7 +572,62 @@ class hikvisionCCTV
 		fclose($fh);
 	}
 	
+	public function extractSegmentsBetweenDatesMP4( $camera_name, $start, $end , $_cachePath ) {
+		$segments = $this->getSegmentsBetweenDates($start, $end);
+		return $this->extractSegmentsMP4( $camera_name, $segments , $_cachePath );
+	}
 
+	public function extractSegmentsMP4( $camera_name, $segments , $_cachePath ) {
+		usort($segments, function ($a, $b) {
+			return $a['cust_startTime'] - $b['cust_startTime'];
+		});
+		$end = end($segments);
+		reset($segments);
+		$start = $segments[0]["cust_startTime"];
+		$end = $end["cust_endTime"];
+		$this->log("EXPORT / VISIONNAGE du $start au $end");
+		$tempFileName = $camera_name.'.Du_'.$start.'_au_'.$end;
+		$pathExtracted = $this->pathJoin( $_cachePath, $tempFileName.'.h264');
+		$pathTranscoded = $this->pathJoin( $_cachePath, $tempFileName.'.mp4');
+		if( file_exists( $pathTranscoded ))
+			return $tempFileName.'.mp4';
+		
+		foreach($segments as $segment) {
+			
+			$file = $this->getFileName($segment["cust_fileNum"]);
+			$path = $this->pathJoin(
+				$this->configuration[$segment["cust_dataDirNum"]]['path'],
+				$file
+			);
+			
+			$fh = fopen( $path, 'rb');
+			if($fh == false) {
+				error_log("impossible d'ouvrir le fichier");
+				die("Unable to open $path");
+			}
+			
+			if( fseek($fh, $segment["startOffset"]) == -1 ) {
+				error_log("impossible d'ouvrir le fichier a la position $segment[startOffset]");
+				die("Unable to seek to position $segment[startOffset] in $path");
+			}
+			while(ftell($fh) < $segment["endOffset"])
+			{
+				file_put_contents($pathExtracted, fread($fh, 4096), FILE_APPEND);
+			}
+			fclose($fh);
+		}
+		
+		// Extract footage and pass to ffmpeg. 
+		$cmd = '[ `ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nokey=1:noprint_wrappers=1 '.$pathExtracted.'` = "h264" ] && ffmpeg -i '.$pathExtracted.' -threads auto -c:v copy -c:a none '.$pathTranscoded.' || ffmpeg -i '.$pathExtracted.' -threads auto -c:v h264 -c:a none '.$pathTranscoded.';';
+		error_log($cmd);
+		system($cmd);
+		
+		// Transcode complete. Remove original file.
+		unlink($pathExtracted);
+		
+		return $tempFileName.'.mp4';
+	}
+	
 	///
 	/// extractSegmentMP4( Index File, File Number , Start Offset, End Offset, 
 	/// Cache Location )
