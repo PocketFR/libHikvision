@@ -336,9 +336,9 @@ function playVideoWindow( _cust_dataDirNum, _cust_fileNum, _startOffset, _endOff
 function highlight(cctvid) {
 	var list= document.getElementsByClassName("cctvImg");
 	for (var i = 0; i < list.length; i++) {
-		list[i].children[2].style = '';
+		list[i].children[3].style = '';
 	}
-	document.getElementById("cctv-"+cctvid).children[2].style.backgroundColor = "#aa8820";
+	document.getElementById("cctv-"+cctvid).children[3].style.backgroundColor = "#aa8820";
 }
 
 window.onbeforeunload = confirmExit;
