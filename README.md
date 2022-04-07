@@ -3,6 +3,7 @@ Add some stuff :
   - Easy to use with multiple cameras ( edit and add more files like CAM01.php )
   - Add support for new Hikvision cameras that use Sqlite instead old binary files
   - Add timeline
+  - Add thumbnails (fast loading with ajax and lazy-loading)
   - Add multiple selection to concatenate multiple sequences into one single video file
   - Add php cron file to erase video every 30 days respect the French CNIL rules
 
