@@ -1,5 +1,10 @@
 # libHikvision Fork
-Add support for new hikvision camera that use sqlite and some other stuff
+Add some stuff :
+  - Easy to use with multiple cameras ( edit and add more files like CAM01.php )
+  - Add support for new Hikvision cameras that use Sqlite instead old binary files
+  - Add timeline
+  - Add multiple selection to concatenate multiple sequences into one single video file
+  - Add php cron file to erase video every 30 days to complain the French CNIL
 
 # libHikvision
 A PHP Class for working with Hikvision datadir's, this file will parse index00.bin files that Hikvision IP Camera software 
